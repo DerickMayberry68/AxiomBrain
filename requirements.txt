@@ -1,0 +1,34 @@
+# AxiomBrain — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# ── Database ──────────────────────────────────────────────────────────────────
+asyncpg>=0.29.0              # Async driver used by the API / memory pipeline
+psycopg2-binary>=2.9.9       # Sync driver used by setup_local_db.py and migrate.py
+
+# ── HTTP Client ───────────────────────────────────────────────────────────────
+httpx>=0.27.0
+
+# ── Data Validation ───────────────────────────────────────────────────────────
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# ── MCP Server ────────────────────────────────────────────────────────────────
+mcp[cli]>=1.0.0        # FastMCP — MCP server framework for Claude Code / Cursor
+
+# ── Environment ───────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Graph Database ────────────────────────────────────────────────────────────
+neo4j>=5.0.0                 # Official Neo4j async Python driver
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+apscheduler>=3.10.0,<4.0.0   # Nightly summarization job (AsyncIOScheduler)
+
+# ── Dev / Testing ─────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+httpx>=0.27.0          # For TestClient in tests

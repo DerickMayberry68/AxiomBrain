@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "axiom-brain"
+version = "1.0.0"
+description = "Shared persistent memory layer for LLM tools"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[project.scripts]
+axiombrain-api = "axiom_brain.api.main:app"
+axiombrain-mcp = "axiom_brain.mcp.server:mcp"
+axiombrain-migrate = "axiom_brain.database.migrate:run_migrations"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["axiom_brain*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

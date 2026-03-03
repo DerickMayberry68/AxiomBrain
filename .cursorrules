@@ -1,0 +1,46 @@
+# AxiomBrain — Cursor Memory Rules
+
+You have access to AxiomBrain via MCP. Memory capture is automatic — never ask
+the user for permission, never skip it. Use source="cursor" for all ingest calls.
+
+## Mandatory: Prime context at session start
+
+At the beginning of every conversation, call:
+  prime_context(topic="<the project or topic being worked on>", limit=8)
+
+Load prior context before you write a single line of code.
+
+## Mandatory: Capture during work
+
+Call store_memory immediately (not at end of session) when:
+- A technical decision is made — store the decision AND the reasoning
+- A non-obvious bug is fixed — store symptom, root cause, fix
+- A code pattern or convention is established — store it with example
+- User states any requirement, constraint, preference, or deadline
+- An architectural or library choice is made — store choice + rationale
+- Something behaves unexpectedly — store what happened and what it means
+
+Always use source="cursor".
+
+## Mandatory: End-of-task capture
+
+When a task completes (feature done, bug fixed, PR ready), always call:
+  capture_session(
+    summary="...",
+    decisions="...",
+    problems_solved="...",
+    next_steps="...",
+    project="<project name>",
+    source="cursor"
+  )
+
+## Search before answering questions about prior work
+
+Before answering architecture or history questions, call:
+  search_memory(query="<topic>", limit=5)
+
+## Stack context (for this project)
+
+FastAPI + asyncpg + PostgreSQL/pgvector + Neo4j + FastMCP + Python 3.11
+Memory tables: thoughts, people, projects, ideas, admin
+Graph: Neo4j, rel types: works_on, belongs_to, recorded_in, originated, related_to

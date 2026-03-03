@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__axiombrain__store_memory",
+      "Bash(curl:*)",
+      "Bash(head:*)"
+    ]
+  }
+}

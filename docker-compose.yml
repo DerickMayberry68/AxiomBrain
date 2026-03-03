@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — Only needed if you are NOT using a local PostgreSQL installation.
+# If you already have PostgreSQL running locally, skip this file entirely and
+# run setup_local_db.py instead.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: axiombrain_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       axiombrain
+    ports:
+      - "5432:5432"
+    volumes:
+      - axiombrain_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d axiombrain"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  axiombrain_data:
+    driver: local

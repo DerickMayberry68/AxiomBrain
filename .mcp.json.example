@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "axiombrain": {
+      "command": "/path/to/your/.venv/bin/python",
+      "args": ["-m", "axiom_brain.mcp.server"],
+      "cwd": "/path/to/AxiomBrain"
+    }
+  }
+}
