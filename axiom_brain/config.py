@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     neo4j_user:     str = "neo4j"
     neo4j_password: str = "password"
 
+    # ── Notifications ─────────────────────────────────────────────────────────
+    # Set TEAMS_WEBHOOK_URL to an Incoming Webhook URL from a Teams channel
+    # connector to enable nightly summary notifications.
+    teams_webhook_url: Optional[str] = None
+
     # ── App metadata ──────────────────────────────────────────────────────────
     app_name: str = "AxiomBrain"
     app_version: str = "1.0.0"
@@ -80,3 +85,7 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return a cached singleton Settings instance."""
     return Settings()
+
+
+# Convenient module-level alias — import as `from axiom_brain.config import settings`
+settings: Settings = get_settings()

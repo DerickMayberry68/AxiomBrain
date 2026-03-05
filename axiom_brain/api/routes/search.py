@@ -1,6 +1,7 @@
 """
 AxiomBrain — POST /search  &  GET /thoughts
 Semantic search across memory tables, plus paginated thoughts log.
+All results are scoped to the caller's workspace via the API key.
 """
 
 from __future__ import annotations
@@ -11,13 +12,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
-from axiom_brain.api.auth import require_api_key
+from axiom_brain.api.auth import get_workspace
 from axiom_brain.api.schemas import (
     SearchRequest, SearchResponse, SearchResult,
     ThoughtItem, ThoughtsResponse,
 )
 from axiom_brain.config import get_settings
 from axiom_brain.database.connection import get_pool
+from axiom_brain.database.workspace import WorkspaceRecord
 from axiom_brain.memory.decay import record_access_multi
 from axiom_brain.memory.embedder import get_embedder
 
@@ -44,7 +46,7 @@ async def _track_access(hits: Dict[str, List[UUID]]) -> None:
 async def search(
     body:       SearchRequest,
     background: BackgroundTasks,
-    _:          str = Depends(require_api_key),
+    workspace:  WorkspaceRecord = Depends(get_workspace),
 ) -> SearchResponse:
     embedder = get_embedder()
     pool     = await get_pool()
@@ -58,8 +60,8 @@ async def search(
     async with pool.acquire() as conn:
         if set(tables_to_search) == set(_ALL_TABLES):
             rows = await conn.fetch(
-                "SELECT * FROM search_all($1::vector, $2)",
-                vec_str, body.limit,
+                "SELECT * FROM search_all($1::vector, $2, $3)",
+                vec_str, body.limit, workspace.id,
             )
             for row in rows:
                 results.append(SearchResult(
@@ -80,6 +82,7 @@ async def search(
                     limit=per_table_limit,
                     topic_filter=body.topic_filter,
                     person_filter=body.person_filter,
+                    workspace_id=workspace.id,
                 )
                 results.extend(rows)
 
@@ -103,14 +106,15 @@ async def _search_table(
     limit: int,
     topic_filter: Optional[str],
     person_filter: Optional[str],
+    workspace_id: Optional[UUID] = None,
 ) -> List[SearchResult]:
     """Call the appropriate match_* function for a given table."""
     results: List[SearchResult] = []
 
     if table == "thoughts":
         rows = await conn.fetch(
-            "SELECT * FROM match_thoughts($1::vector, $2, $3, $4)",
-            vec_str, limit, topic_filter, person_filter,
+            "SELECT * FROM match_thoughts($1::vector, $2, $3, $4, $5)",
+            vec_str, limit, topic_filter, person_filter, workspace_id,
         )
         for row in rows:
             results.append(SearchResult(
@@ -129,8 +133,8 @@ async def _search_table(
 
     elif table == "people":
         rows = await conn.fetch(
-            "SELECT * FROM match_people($1::vector, $2, $3)",
-            vec_str, limit, topic_filter,
+            "SELECT * FROM match_people($1::vector, $2, $3, $4)",
+            vec_str, limit, topic_filter, workspace_id,
         )
         for row in rows:
             results.append(SearchResult(
@@ -145,8 +149,8 @@ async def _search_table(
 
     elif table == "projects":
         rows = await conn.fetch(
-            "SELECT * FROM match_projects($1::vector, $2, NULL)",
-            vec_str, limit,
+            "SELECT * FROM match_projects($1::vector, $2, NULL, $3)",
+            vec_str, limit, workspace_id,
         )
         for row in rows:
             results.append(SearchResult(
@@ -161,8 +165,8 @@ async def _search_table(
 
     elif table == "ideas":
         rows = await conn.fetch(
-            "SELECT * FROM match_ideas($1::vector, $2, $3)",
-            vec_str, limit, topic_filter,
+            "SELECT * FROM match_ideas($1::vector, $2, $3, $4)",
+            vec_str, limit, topic_filter, workspace_id,
         )
         for row in rows:
             results.append(SearchResult(
@@ -176,8 +180,8 @@ async def _search_table(
 
     elif table == "admin":
         rows = await conn.fetch(
-            "SELECT * FROM match_admin($1::vector, $2, NULL)",
-            vec_str, limit,
+            "SELECT * FROM match_admin($1::vector, $2, NULL, $3)",
+            vec_str, limit, workspace_id,
         )
         for row in rows:
             results.append(SearchResult(
@@ -202,29 +206,31 @@ async def _search_table(
     summary="Paginated audit log of all ingested content",
 )
 async def list_thoughts(
-    limit:  int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    source: Optional[str] = Query(default=None),
-    _: str = Depends(require_api_key),
+    limit:     int = Query(default=20, ge=1, le=100),
+    offset:    int = Query(default=0, ge=0),
+    source:    Optional[str] = Query(default=None),
+    workspace: WorkspaceRecord = Depends(get_workspace),
 ) -> ThoughtsResponse:
     pool = await get_pool()
 
-    where_clause = "WHERE source = $3" if source else ""
-    params: list = [limit, offset]
+    base_where = "WHERE workspace_id = $3"
+    params: list = [limit, offset, workspace.id]
+
     if source:
+        base_where += " AND source = $4"
         params.append(source)
 
     async with pool.acquire() as conn:
         count_row = await conn.fetchrow(
-            f"SELECT COUNT(*) AS total FROM thoughts {where_clause}",
-            *([source] if source else []),
+            f"SELECT COUNT(*) AS total FROM thoughts {base_where}",
+            *params[2:],  # skip limit/offset for count
         )
         rows = await conn.fetch(
             f"""
             SELECT id, content, content_type, topics, people, source,
                    routed_to, confidence, created_at
             FROM thoughts
-            {where_clause}
+            {base_where}
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
             """,

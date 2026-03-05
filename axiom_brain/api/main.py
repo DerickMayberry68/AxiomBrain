@@ -24,6 +24,8 @@ from axiom_brain.api.routes import (
     summarize,
     decay,
     dashboard,
+    webhooks,
+    workspaces,
 )
 from axiom_brain.jobs.summarize import run_summarization_job
 from axiom_brain.jobs.decay import run_decay_job
@@ -124,6 +126,8 @@ def create_app() -> FastAPI:
     app.include_router(summarize.router,  tags=["Summarization"])
     app.include_router(decay.router,      tags=["Decay"])
     app.include_router(dashboard.router,  tags=["Dashboard"])
+    app.include_router(webhooks.router,    tags=["Webhooks"])
+    app.include_router(workspaces.router)  # prefix + tags defined in the router
 
     return app
 

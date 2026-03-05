@@ -14,6 +14,7 @@ Designed to be called:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from axiom_brain.memory.summarizer import (
     summarize_person,
     summarize_project,
 )
+from axiom_brain.notifications.teams import notify_summary_complete
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +81,9 @@ async def run_summarization_job(
         "errors":   [],
     }
 
-    embedder = Embedder()
-    pool     = await get_pool()
+    embedder   = Embedder()
+    pool       = await get_pool()
+    _started   = time.monotonic()
 
     async with pool.acquire() as conn:
 
@@ -138,11 +141,27 @@ async def run_summarization_job(
             logger.error("Person enumeration failed: %s", exc, exc_info=True)
             results["errors"].append({"type": "person_enum", "error": str(exc)})
 
+    duration = time.monotonic() - _started
     logger.info(
-        "Summarization job complete — daily=%s, projects=%d, people=%d, errors=%d",
+        "Summarization job complete — daily=%s, projects=%d, people=%d, errors=%d (%.1fs)",
         results["daily"]["created"],
         len(results["projects"]),
         len(results["people"]),
         len(results["errors"]),
+        duration,
     )
+
+    # ── Notify Teams (fire-and-forget; never blocks or raises) ────────────────
+    # Build a stats shape that matches notify_summary_complete's expectations.
+    _stats = {
+        "thoughts": {
+            "summaries_created": 1 if results["daily"]["created"] else 0,
+            "thoughts_processed": 0,  # not tracked at job level
+        },
+        "projects": {"summaries_created": len(results["projects"])},
+        "people":   {"summaries_created": len(results["people"])},
+        "errors":   results["errors"],
+    }
+    notify_summary_complete(_stats, duration_seconds=duration)
+
     return results

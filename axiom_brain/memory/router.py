@@ -52,6 +52,7 @@ class MemoryRouter:
         content: str,
         source: str = "unknown",
         target_table: Optional[str] = None,  # Override routing if caller knows the type
+        workspace_id: Optional[UUID] = None,  # Workspace to write into
     ) -> IngestResult:
         """
         Full pipeline:
@@ -87,6 +88,7 @@ class MemoryRouter:
                 classification=classification,
                 source=source,
                 routed_to=routed_table,
+                workspace_id=workspace_id,
             )
 
             routed_id: Optional[UUID] = None
@@ -97,6 +99,7 @@ class MemoryRouter:
                     content=content,
                     embedding=embedding,
                     classification=classification,
+                    workspace_id=workspace_id,
                 )
 
             # Step 5 — auto-detect graph relationships
@@ -142,13 +145,14 @@ async def _write_thought(
     classification: ClassificationResult,
     source: str,
     routed_to: str,
+    workspace_id: Optional[UUID] = None,
 ) -> UUID:
     row = await conn.fetchrow(
         """
         INSERT INTO thoughts
             (content, embedding, content_type, topics, people, action_items,
-             confidence, source, routed_to)
-        VALUES ($1, $2::vector, $3, $4, $5, $6, $7, $8, $9)
+             confidence, source, routed_to, workspace_id)
+        VALUES ($1, $2::vector, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id
         """,
         content,
@@ -160,6 +164,7 @@ async def _write_thought(
         classification.confidence,
         source,
         routed_to,
+        workspace_id,
     )
     return row["id"]
 
@@ -170,6 +175,7 @@ async def _write_to_table(
     content: str,
     embedding: List[float],
     classification: ClassificationResult,
+    workspace_id: Optional[UUID] = None,
 ) -> Optional[UUID]:
     """Write to the appropriate secondary table based on routing decision."""
     vec_str = f"[{','.join(str(x) for x in embedding)}]"
@@ -177,10 +183,10 @@ async def _write_to_table(
     if table == "people":
         row = await conn.fetchrow(
             """
-            INSERT INTO people (name, notes, embedding, topics, last_seen)
+            INSERT INTO people (name, notes, embedding, topics, last_seen, workspace_id)
             VALUES (
                 COALESCE(($2::text[])[1], 'Unknown'),
-                $1, $3::vector, $4::text[], NOW()
+                $1, $3::vector, $4::text[], NOW(), $5
             )
             ON CONFLICT DO NOTHING
             RETURNING id
@@ -189,39 +195,39 @@ async def _write_to_table(
             classification.people or ["Unknown"],
             vec_str,
             classification.topics,
+            workspace_id,
         )
 
     elif table == "ideas":
-        # Use first 120 chars as title, rest as elaboration
         title = content[:120].rstrip()
         elaboration = content[120:] if len(content) > 120 else None
         row = await conn.fetchrow(
             """
-            INSERT INTO ideas (title, elaboration, embedding, topics)
-            VALUES ($1, $2, $3::vector, $4::text[])
+            INSERT INTO ideas (title, elaboration, embedding, topics, workspace_id)
+            VALUES ($1, $2, $3::vector, $4::text[], $5)
             RETURNING id
             """,
-            title, elaboration, vec_str, classification.topics,
+            title, elaboration, vec_str, classification.topics, workspace_id,
         )
 
     elif table == "admin":
         row = await conn.fetchrow(
             """
-            INSERT INTO admin (task, embedding, action_items, topics)
-            VALUES ($1, $2::vector, $3::text[], $4::text[])
+            INSERT INTO admin (task, embedding, action_items, topics, workspace_id)
+            VALUES ($1, $2::vector, $3::text[], $4::text[], $5)
             RETURNING id
             """,
-            content, vec_str, classification.action_items, classification.topics,
+            content, vec_str, classification.action_items, classification.topics, workspace_id,
         )
 
     elif table == "projects":
         row = await conn.fetchrow(
             """
-            INSERT INTO projects (name, description, embedding, topics)
-            VALUES ($1, $1, $2::vector, $3::text[])
+            INSERT INTO projects (name, description, embedding, topics, workspace_id)
+            VALUES ($1, $1, $2::vector, $3::text[], $4)
             RETURNING id
             """,
-            content[:200], vec_str, classification.topics,
+            content[:200], vec_str, classification.topics, workspace_id,
         )
 
     else:

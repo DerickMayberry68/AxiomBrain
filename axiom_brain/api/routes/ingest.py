@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from axiom_brain.api.auth import require_api_key
+from axiom_brain.api.auth import get_workspace
 from axiom_brain.api.schemas import IngestRequest, IngestResponse
+from axiom_brain.database.workspace import WorkspaceRecord
 from axiom_brain.memory.router import get_router
 
 router = APIRouter()
@@ -26,13 +27,14 @@ router = APIRouter()
 )
 async def ingest(
     body: IngestRequest,
-    _: str = Depends(require_api_key),
+    workspace: WorkspaceRecord = Depends(get_workspace),
 ) -> IngestResponse:
     memory_router = get_router()
     result = await memory_router.ingest(
         content=body.content,
         source=body.source,
         target_table=body.target_table,
+        workspace_id=workspace.id,
     )
     return IngestResponse(
         thought_id=result.thought_id,
