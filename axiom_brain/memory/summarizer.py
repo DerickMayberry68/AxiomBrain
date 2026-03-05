@@ -104,24 +104,40 @@ async def _call_llm(prompt: str) -> str:
 
 async def summarize_daily_thoughts(
     conn,
-    hours_back: int = 24,
-    min_count:  int = 3,
+    hours_back:   int           = 24,
+    min_count:    int           = 3,
+    workspace_id: Optional[UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Summarize unsummarized thoughts from the last N hours.
     Returns a dict ready to insert into the summaries table, or None if
     there aren't enough new thoughts to warrant a summary.
+    When workspace_id is provided, only thoughts from that workspace are included.
     """
-    rows = await conn.fetch(
-        """
-        SELECT id, content, content_type, topics, source, created_at
-        FROM   thoughts
-        WHERE  summarized_at IS NULL
-          AND  created_at >= NOW() - ($1 || ' hours')::interval
-        ORDER  BY created_at ASC
-        """,
-        str(hours_back),
-    )
+    if workspace_id is not None:
+        rows = await conn.fetch(
+            """
+            SELECT id, content, content_type, topics, source, created_at
+            FROM   thoughts
+            WHERE  summarized_at IS NULL
+              AND  created_at >= NOW() - ($1 || ' hours')::interval
+              AND  workspace_id = $2
+            ORDER  BY created_at ASC
+            """,
+            str(hours_back),
+            workspace_id,
+        )
+    else:
+        rows = await conn.fetch(
+            """
+            SELECT id, content, content_type, topics, source, created_at
+            FROM   thoughts
+            WHERE  summarized_at IS NULL
+              AND  created_at >= NOW() - ($1 || ' hours')::interval
+            ORDER  BY created_at ASC
+            """,
+            str(hours_back),
+        )
 
     if len(rows) < min_count:
         logger.info("daily_thoughts: only %d unsummarized thoughts, skipping", len(rows))
@@ -162,48 +178,86 @@ async def summarize_daily_thoughts(
         "period_end":    period_end,
         "topics":        unique_topics,
         "thought_ids":   thought_ids,   # used to mark as summarized
+        "workspace_id":  workspace_id,
     }
 
 
 async def summarize_project(
     conn,
-    project_id: UUID,
+    project_id:   UUID,
+    workspace_id: Optional[UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Summarize all memories linked to a project via relationships.
     Returns a dict ready to insert into summaries, or None if no content found.
+    When workspace_id is provided, scopes the project lookup and thought queries
+    to that workspace.
     """
-    # Get project details
-    project = await conn.fetchrow(
-        "SELECT id, name, description, topics FROM projects WHERE id = $1",
-        project_id,
-    )
+    # Get project details — scope to workspace when provided
+    if workspace_id is not None:
+        project = await conn.fetchrow(
+            "SELECT id, name, description, topics FROM projects WHERE id = $1 AND workspace_id = $2",
+            project_id,
+            workspace_id,
+        )
+    else:
+        project = await conn.fetchrow(
+            "SELECT id, name, description, topics FROM projects WHERE id = $1",
+            project_id,
+        )
     if not project:
         return None
 
     # Get all thoughts linked to this project via relationships
-    rows = await conn.fetch(
-        """
-        SELECT t.content, t.created_at, t.source, t.topics
-        FROM   thoughts t
-        JOIN   relationships r
-               ON r.from_table = 'thoughts' AND r.from_id = t.id
-               AND r.to_table = 'projects'  AND r.to_id   = $1
-        UNION
-        -- Also include direct thoughts that mentioned this project
-        SELECT t.content, t.created_at, t.source, t.topics
-        FROM   thoughts t
-        WHERE  t.routed_to = 'projects'
-          AND  EXISTS (
-              SELECT 1 FROM projects p
-              WHERE  p.id = $1
-                AND  t.content ILIKE '%' || SPLIT_PART(p.name, ' ', 1) || '%'
-          )
-        ORDER  BY created_at ASC
-        LIMIT  50
-        """,
-        project_id,
-    )
+    if workspace_id is not None:
+        rows = await conn.fetch(
+            """
+            SELECT t.content, t.created_at, t.source, t.topics
+            FROM   thoughts t
+            JOIN   relationships r
+                   ON r.from_table = 'thoughts' AND r.from_id = t.id
+                   AND r.to_table = 'projects'  AND r.to_id   = $1
+            WHERE  t.workspace_id = $2
+            UNION
+            -- Also include direct thoughts that mentioned this project
+            SELECT t.content, t.created_at, t.source, t.topics
+            FROM   thoughts t
+            WHERE  t.routed_to = 'projects'
+              AND  t.workspace_id = $2
+              AND  EXISTS (
+                  SELECT 1 FROM projects p
+                  WHERE  p.id = $1
+                    AND  t.content ILIKE '%' || SPLIT_PART(p.name, ' ', 1) || '%'
+              )
+            ORDER  BY created_at ASC
+            LIMIT  50
+            """,
+            project_id,
+            workspace_id,
+        )
+    else:
+        rows = await conn.fetch(
+            """
+            SELECT t.content, t.created_at, t.source, t.topics
+            FROM   thoughts t
+            JOIN   relationships r
+                   ON r.from_table = 'thoughts' AND r.from_id = t.id
+                   AND r.to_table = 'projects'  AND r.to_id   = $1
+            UNION
+            -- Also include direct thoughts that mentioned this project
+            SELECT t.content, t.created_at, t.source, t.topics
+            FROM   thoughts t
+            WHERE  t.routed_to = 'projects'
+              AND  EXISTS (
+                  SELECT 1 FROM projects p
+                  WHERE  p.id = $1
+                    AND  t.content ILIKE '%' || SPLIT_PART(p.name, ' ', 1) || '%'
+              )
+            ORDER  BY created_at ASC
+            LIMIT  50
+            """,
+            project_id,
+        )
 
     if not rows:
         logger.info("project_rollup: no memories found for project %s", project_id)
@@ -238,36 +292,60 @@ async def summarize_project(
         "period_end":    period_end,
         "topics":        list(project["topics"] or []),
         "thought_ids":   [],
+        "workspace_id":  workspace_id,
     }
 
 
 async def summarize_person(
     conn,
-    person_id: UUID,
+    person_id:    UUID,
+    workspace_id: Optional[UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Summarize all known context about a person.
     Returns a dict ready to insert into summaries, or None if no content found.
+    When workspace_id is provided, scopes the person lookup and thought queries
+    to that workspace.
     """
-    person = await conn.fetchrow(
-        "SELECT id, name, notes, topics FROM people WHERE id = $1",
-        person_id,
-    )
+    if workspace_id is not None:
+        person = await conn.fetchrow(
+            "SELECT id, name, notes, topics FROM people WHERE id = $1 AND workspace_id = $2",
+            person_id,
+            workspace_id,
+        )
+    else:
+        person = await conn.fetchrow(
+            "SELECT id, name, notes, topics FROM people WHERE id = $1",
+            person_id,
+        )
     if not person:
         return None
 
-    # Thoughts that mention this person by name
-    rows = await conn.fetch(
-        """
-        SELECT content, created_at, source, topics
-        FROM   thoughts
-        WHERE  $1 = ANY(people)
-           OR  content ILIKE '%' || $2 || '%'
-        ORDER  BY created_at ASC
-        LIMIT  30
-        """,
-        person["name"], person["name"],
-    )
+    # Thoughts that mention this person by name — scope to workspace when provided
+    if workspace_id is not None:
+        rows = await conn.fetch(
+            """
+            SELECT content, created_at, source, topics
+            FROM   thoughts
+            WHERE  ($1 = ANY(people) OR content ILIKE '%' || $2 || '%')
+              AND  workspace_id = $3
+            ORDER  BY created_at ASC
+            LIMIT  30
+            """,
+            person["name"], person["name"], workspace_id,
+        )
+    else:
+        rows = await conn.fetch(
+            """
+            SELECT content, created_at, source, topics
+            FROM   thoughts
+            WHERE  $1 = ANY(people)
+               OR  content ILIKE '%' || $2 || '%'
+            ORDER  BY created_at ASC
+            LIMIT  30
+            """,
+            person["name"], person["name"],
+        )
 
     if not rows:
         logger.info("person_profile: no memories found for person %s", person_id)
@@ -307,6 +385,7 @@ async def summarize_person(
         "period_end":    period_end,
         "topics":        unique_topics,
         "thought_ids":   [],
+        "workspace_id":  workspace_id,
     }
 
 
@@ -318,17 +397,20 @@ async def save_summary(conn, result: Dict[str, Any], embedder) -> UUID:
     """
     Embed and persist a summary dict to the summaries table.
     Marks source thoughts as summarized if thought_ids are provided.
+    workspace_id is read from result["workspace_id"] — may be None for
+    legacy/admin calls that predate workspace support.
     """
-    embedding = await embedder.embed(result["content"])
-    vec_str   = f"[{','.join(str(x) for x in embedding)}]"
+    embedding    = await embedder.embed(result["content"])
+    vec_str      = f"[{','.join(str(x) for x in embedding)}]"
+    workspace_id = result.get("workspace_id")
 
     row = await conn.fetchrow(
         """
         INSERT INTO summaries
             (summary_type, subject_table, subject_id, subject_name,
              content, embedding, source_count,
-             period_start, period_end, topics)
-        VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10::text[])
+             period_start, period_end, topics, workspace_id)
+        VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10::text[], $11)
         RETURNING id
         """,
         result["summary_type"],
@@ -341,16 +423,30 @@ async def save_summary(conn, result: Dict[str, Any], embedder) -> UUID:
         result["period_start"],
         result["period_end"],
         result["topics"],
+        workspace_id,
     )
     summary_id = row["id"]
 
-    # Mark thoughts as summarized
+    # Mark thoughts as summarized — scope to workspace when provided so we
+    # don't accidentally touch another workspace's thoughts
     thought_ids = result.get("thought_ids") or []
     if thought_ids:
-        await conn.execute(
-            "UPDATE thoughts SET summarized_at = NOW() WHERE id = ANY($1::uuid[])",
-            thought_ids,
-        )
+        if workspace_id is not None:
+            await conn.execute(
+                """
+                UPDATE thoughts
+                SET    summarized_at = NOW()
+                WHERE  id = ANY($1::uuid[])
+                  AND  workspace_id = $2
+                """,
+                thought_ids,
+                workspace_id,
+            )
+        else:
+            await conn.execute(
+                "UPDATE thoughts SET summarized_at = NOW() WHERE id = ANY($1::uuid[])",
+                thought_ids,
+            )
         logger.info("Marked %d thoughts as summarized", len(thought_ids))
 
     return summary_id

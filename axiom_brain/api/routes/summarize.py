@@ -13,7 +13,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from axiom_brain.api.auth import require_api_key
+from axiom_brain.api.auth import get_workspace
+from axiom_brain.database.workspace import WorkspaceRecord
 from axiom_brain.api.schemas import (
     SummarizeRequest,
     SummarizeResponse,
@@ -34,16 +35,18 @@ _VALID_TYPES = ("daily_thoughts", "project_rollup", "person_profile", "all_table
     summary="Trigger the summarization pipeline (on-demand or scheduled)",
 )
 async def trigger_summarize(
-    body: SummarizeRequest = SummarizeRequest(),
-    _:   str              = Depends(require_api_key),
+    body:      SummarizeRequest = SummarizeRequest(),
+    workspace: WorkspaceRecord  = Depends(get_workspace),
 ) -> SummarizeResponse:
     """
     Run all three summary modes (daily thoughts, project rollups, person profiles).
+    Scoped to the calling workspace — only that workspace's memories are summarized.
     Safe to call repeatedly — unsummarized thoughts are only consumed once.
     """
     results = await run_summarization_job(
         hours_back=body.hours_back,
         min_thought_count=body.min_thought_count,
+        workspace_id=workspace.id,
     )
 
     # Flatten summary IDs for the response
@@ -68,10 +71,10 @@ async def trigger_summarize(
     summary="List recent summaries with optional type filter",
 )
 async def list_summaries(
-    summary_type: Optional[str] = Query(default=None, description="Filter by type: daily_thoughts | project_rollup | person_profile"),
-    limit:        int           = Query(default=20, ge=1, le=100),
-    offset:       int           = Query(default=0, ge=0),
-    _:            str           = Depends(require_api_key),
+    summary_type: Optional[str]  = Query(default=None, description="Filter by type: daily_thoughts | project_rollup | person_profile"),
+    limit:        int            = Query(default=20, ge=1, le=100),
+    offset:       int            = Query(default=0, ge=0),
+    workspace:    WorkspaceRecord = Depends(get_workspace),
 ) -> SummariesListResponse:
     if summary_type and summary_type not in _VALID_TYPES:
         raise HTTPException(status_code=422, detail=f"Invalid summary_type: {summary_type!r}")
@@ -85,14 +88,15 @@ async def list_summaries(
                        period_start, period_end, topics, created_at
                 FROM   summaries
                 WHERE  summary_type = $1
+                  AND  workspace_id = $2
                 ORDER  BY created_at DESC
-                LIMIT  $2 OFFSET $3
+                LIMIT  $3 OFFSET $4
                 """,
-                summary_type, limit, offset,
+                summary_type, workspace.id, limit, offset,
             )
             total = await conn.fetchval(
-                "SELECT COUNT(*) FROM summaries WHERE summary_type = $1",
-                summary_type,
+                "SELECT COUNT(*) FROM summaries WHERE summary_type = $1 AND workspace_id = $2",
+                summary_type, workspace.id,
             )
         else:
             rows = await conn.fetch(
@@ -100,12 +104,16 @@ async def list_summaries(
                 SELECT id, summary_type, subject_name, content, source_count,
                        period_start, period_end, topics, created_at
                 FROM   summaries
+                WHERE  workspace_id = $1
                 ORDER  BY created_at DESC
-                LIMIT  $1 OFFSET $2
+                LIMIT  $2 OFFSET $3
                 """,
-                limit, offset,
+                workspace.id, limit, offset,
             )
-            total = await conn.fetchval("SELECT COUNT(*) FROM summaries")
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM summaries WHERE workspace_id = $1",
+                workspace.id,
+            )
 
     items = [
         SummaryItem(
@@ -132,7 +140,7 @@ async def list_summaries(
 )
 async def get_summary(
     summary_id: UUID,
-    _:          str  = Depends(require_api_key),
+    workspace:  WorkspaceRecord = Depends(get_workspace),
 ) -> SummaryItem:
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -142,8 +150,10 @@ async def get_summary(
                    period_start, period_end, topics, created_at
             FROM   summaries
             WHERE  id = $1
+              AND  workspace_id = $2
             """,
             summary_id,
+            workspace.id,
         )
 
     if not row:
